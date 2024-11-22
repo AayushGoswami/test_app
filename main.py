@@ -1,72 +1,75 @@
 import streamlit as st
-import sounddevice as sd
-import soundfile as sf
-import numpy as np
-import tempfile
-import os
+import base64
+import io
+import wave
 
-class AudioRecorder:
-    def __init__(self):
-        self.recording = None
-        self.sample_rate = 44100
-        self.temp_audio_file = None
+def audio_recorder():
+    """
+    Custom audio recorder using Web Audio API
+    """
+    st.markdown("""
+    <script>
+    let mediaRecorder;
+    let audioChunks = [];
 
-    def start_recording(self):
-        st.session_state.is_recording = True
-        self.recording = sd.rec(int(self.sample_rate * 5), 
-                                samplerate=self.sample_rate, 
-                                channels=1, 
-                                dtype='float64')
-
-    def stop_recording(self):
-        sd.stop()
-        st.session_state.is_recording = False
+    async function startRecording() {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
         
-        # Create a temporary file to save the recording
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
-            sf.write(temp_file.name, self.recording, self.sample_rate)
-            self.temp_audio_file = temp_file.name
+        audioChunks = [];
+        mediaRecorder.addEventListener("dataavailable", event => {
+            audioChunks.push(event.data);
+        });
 
-    def play_recording(self):
-        if self.temp_audio_file and os.path.exists(self.temp_audio_file):
-            data, _ = sf.read(self.temp_audio_file)
-            sd.play(data, self.sample_rate)
-            sd.wait()
-        else:
-            st.warning("No recording available. Please record first.")
+        mediaRecorder.start();
+        document.getElementById('status').innerText = 'Recording...';
+    }
+
+    async function stopRecording() {
+        mediaRecorder.stop();
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        const reader = new FileReader();
+        
+        reader.onloadend = () => {
+            const base64data = reader.result.split(',')[1];
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue', 
+                payload: base64data
+            }, '*');
+        }
+        
+        reader.readAsDataURL(audioBlob);
+        document.getElementById('status').innerText = 'Recording Stopped';
+    }
+
+    window.startRecording = startRecording;
+    window.stopRecording = stopRecording;
+    </script>
+    <div id="status"></div>
+    <button onclick="startRecording()" type="button">Start Recording</button>
+    <button onclick="stopRecording()" type="button">Stop Recording</button>
+    """, unsafe_allow_html=True)
 
 def main():
-    st.title("Speech Recorder")
+    st.title("Web Audio Recorder")
     
-    # Initialize session state
-    if 'is_recording' not in st.session_state:
-        st.session_state.is_recording = False
+    # Get audio data from browser
+    audio_base64 = audio_recorder()
     
-    # Create AudioRecorder instance
-    recorder = AudioRecorder()
-
-    # Recording controls
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if not st.session_state.is_recording:
-            if st.button("Start Recording", type="primary"):
-                recorder.start_recording()
-                st.experimental_rerun()
-        else:
-            if st.button("Stop Recording", type="secondary"):
-                recorder.stop_recording()
-                st.experimental_rerun()
-    
-    with col2:
-        if st.button("Play Recording"):
-            recorder.play_recording()
-
-    # Display recording status
-    if st.session_state.is_recording:
-        st.info("Recording in progress...")
-    elif recorder.temp_audio_file:
-        st.success("Recording completed. Click 'Play Recording' to listen.")
+    if audio_base64:
+        # Decode base64 audio
+        audio_bytes = base64.b64decode(audio_base64)
+        
+        # Option to play back
+        st.audio(audio_bytes, format='audio/wav')
+        
+        # Save option
+        st.download_button(
+            label="Download Recording",
+            data=audio_bytes,
+            file_name='recording.wav',
+            mime='audio/wav'
+        )
 
 if __name__ == "__main__":
     main()
